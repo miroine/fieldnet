@@ -1,5 +1,6 @@
 """Streamlit uncertainty workspace and export helpers for FieldNet v29."""
 from __future__ import annotations
+from network import mc_store
 import json
 import pandas as pd
 import plotly.express as px
@@ -142,6 +143,21 @@ def _mc_status(st):
     _mc_status_body(st)
 
 
+def _saved_runs(st):
+    ss=st.session_state; store=mc_store.gather(ss)
+    if not store: return
+    with st.expander(f'Saved Monte Carlo results ({len(store)}) — compare runs',expanded=False):
+        flt=st.text_input('Show metrics containing',value='cumulative',key='v17_cmp_filter')
+        st.dataframe(mc_store.compare_table(ss,None,flt),hide_index=True,use_container_width=True)
+        names=list(store)
+        if len(names)>=2:
+            c1,c2=st.columns(2); a=c1.selectbox('Base',names,key='v17_cmp_a'); b=c2.selectbox('Compare with',names,index=min(1,len(names)-1),key='v17_cmp_b')
+            if a!=b: st.dataframe(mc_store.delta_table(ss,a,b,flt),hide_index=True,use_container_width=True)
+        d1,d2=st.columns([3,1]); dn=d1.selectbox('Saved run',names,key='v17_cmp_sel')
+        if d2.button('Show',key='v17_cmp_show',use_container_width=True): ss['v17_mc']=store[dn]['result']; ss['v17_mc_t0']=(get_job('v17_mc').t0 if get_job('v17_mc') else None); st.rerun()
+        if d2.button('Delete',key='v17_cmp_del',use_container_width=True) and dn in (ss.get('mc_saved') or {}): mc_store.delete_result(ss,dn); st.rerun()
+
+
 def render_uncertainty(st,nodes,edges):
     st.subheader('Uncertainty, Monte Carlo & Risk')
     st.caption('Planning-level probabilistic wrapper around the deterministic production engine. P90 is conservative and P10 optimistic for production/reserves-style metrics. Samples are reproducible from the displayed seed.')
@@ -162,6 +178,7 @@ def render_uncertainty(st,nodes,edges):
     _mc_status(st)
     if job and job.status=='done' and ss.get('v17_mc_t0')!=job.t0: ss['v17_mc']=job.result; ss['v17_mc_t0']=job.t0
     r=st.session_state.get('v17_mc')
+    _saved_runs(st)
     if not r: return
     a,b,c,d=st.columns(4); a.metric('Successful',r['successful_samples']); b.metric('Failed',r['failed_samples']); c.metric('Success rate',f"{100*r.get('success_fraction',0):.1f}%"); d.metric('Seed',r['seed'])
     metrics=[]
@@ -186,4 +203,6 @@ def render_uncertainty(st,nodes,edges):
         st.plotly_chart(px.histogram(good,x='cumulative_oil_m3',nbins=min(40,max(10,len(good)//3)),title='Cumulative oil uncertainty distribution'),use_container_width=True)
     if r.get('profiles'): _render_profiles(st,r)
     with st.expander('Realizations'): st.dataframe(runs,hide_index=True,use_container_width=True)
+    sc1,sc2=st.columns([3,1]); nm=sc1.text_input('Save this result as',value='',key='v17_save_name',placeholder='e.g. Base case, 3 wells'); 
+    if sc2.button('💾 Save result',key='v17_save_btn',use_container_width=True): st.success(f"Saved as '{mc_store.save_result(ss,nm,r)}'. It is stored with the case file."); 
     d1,d2=st.columns(2); d1.download_button('Download Monte Carlo CSV',export_mc_csv(r),'fieldnet_monte_carlo.csv','text/csv',use_container_width=True); d2.download_button('Download Monte Carlo JSON',export_mc_json(r),'fieldnet_monte_carlo.json','application/json',use_container_width=True)

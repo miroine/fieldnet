@@ -23,6 +23,8 @@ def render_drainage(st, nodes, edges):
         step = c.selectbox('Report step [days]', [90, 180, 365], index=1, key='ds_step')
         phase = d.selectbox('Primary phase', ['oil', 'gas'], index=0 if phase0 == 'oil' else 1, key='ds_phase')
         order = st.multiselect('Producers in drilling priority', list(names), default=list(names), format_func=names.get, key='ds_order')
+        greedy = st.checkbox('Find the best drilling order (placement sweep: each step adds the well that gives most recovery)', value=False, key='ds_greedy',
+                             help='Runs n(n+1)/2 forecasts for n wells, so it is slower. The multiselect above is then used only as the candidate list.')
         e1, e2, e3 = st.columns(3)
         thr = e1.slider('Minimum extra recovery from one more well [%]', 1, 30, 5, key='ds_thr')
         unit = 'MSm³/d' if phase == 'gas' else 'Sm³/d'; k = 1e6 if phase == 'gas' else 1.0
@@ -38,6 +40,9 @@ def render_drainage(st, nodes, edges):
         econ = {'price_per_sm3': price / (1e6 if phase == 'gas' else 1.0), 'capex_per_well': capex, 'opex_per_well_year': opex, 'discount_rate': disc} if use_e else None
         rb.progress(0.02, 'Starting well-count cases…')
         try:
+            if greedy:
+                rb.progress(0.02, 'Placement sweep…')
+                order, _ = D.greedy_order(nodes, edges, order, start, float(years), int(step), True, phase, step_solver=_step_solver(st), workers=_workers(st), progress=lambda i, n: rb.progress(0.5 * i / n, f'placement {i}/{n}'))
             st.session_state.ds_result = D.drainage_strategy(nodes, edges, order, start, float(years), int(step), True, thr / 100.0, (pt * k) or None, pty or None, econ, phase,
                                                              progress=lambda i, n: rb.progress(i / n, f'{i}/{n} well counts'), step_solver=_step_solver(st), workers=_workers(st))
             st.session_state.ds_names = names
@@ -58,3 +63,24 @@ def render_drainage(st, nodes, edges):
     b.plotly_chart(charts.bars(show.assign(Label=show['Wells'].astype(str)), 'Label', f'Plateau rate [{unit}]', 'Plateau rate vs number of producers', unit, color=col), use_container_width=True, key='ds_plat')
     st.dataframe(show, hide_index=True, use_container_width=True)
     st.download_button('Download the recommendation page (HTML, print to PDF)', D.to_html(res), 'fieldnet_drainage_strategy.html', 'text/html', use_container_width=True, key='ds_dl')
+
+    _tank_section(st, res, nm)
+
+
+def _tank_section(st, res, nm):
+    ts = (res.get('tank_study') or {}).get('tanks') or {}
+    if not ts: return
+    st.markdown('#### Per-tank result (wells draining several tanks count for each tank)')
+    rows = []
+    for tid, t in ts.items():
+        rows.append({'Tank': t['name'], 'PVT': t['pvt'], 'Final RF [%]': t['final_rf'], 'Optimal field well count': t['optimal_wells_field'], 'Wells on tank at optimum': t['optimal_wells_on_tank'],
+                     'Commingled wells': ', '.join(nm.get(w, w) for w in t['commingled_wells']) or '—'})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    for tid, t in ts.items(): fig.add_scatter(x=[s['Wells'] for s in t['series']], y=[s['RF [%]'] for s in t['series']], mode='lines+markers', name=t['name'])
+    fig.update_layout(title='Recovery factor of each tank vs number of producers', xaxis_title='Producers drilled (in the order above)', yaxis_title='RF [%]', height=320, margin=dict(l=10, r=10, t=40, b=10))
+    st.plotly_chart(fig, use_container_width=True, key='ds_tank_rf')
+    for tid, t in ts.items():
+        for f in t['pvt_flags']: st.warning(f"⚠ {t['name']}: {f}")
+    st.caption('Each tank’s optimal count is the smallest number of field wells after which a further well that drains that tank adds less than the extra-recovery threshold to the tank’s cumulative production.')

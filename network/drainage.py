@@ -122,7 +122,73 @@ def drainage_strategy(nodes, edges, order, start, years, step_days, enforce_cons
                f"{'RF %.1f %%' % r['RF [%]'] if r['RF [%]'] is not None else 'RF n/a'}, limited by {limit}.")
     tank_targets = [(n_.get('name', n_['id']), (n_.get('params') or {}).get('target_rf')) for n_ in nodes if n_.get('kind') == 'reservoir' and (n_.get('params') or {}).get('target_rf')]
     return {'rows': rows, 'recommended_wells': rec, 'reason': '; '.join(why) + '.', 'summary': summary, 'phase': phase, 'unit': unit, 'unit_scale': k,
-            'suggested_rf_pct': r['RF [%]'], 'limit': limit, 'tank_targets': tank_targets, 'years': years, 'economics': economics, 'plateau_target': plateau_target}
+            'tank_study': tank_study(nodes, rows, min_gain_fraction), 'suggested_rf_pct': r['RF [%]'], 'limit': limit, 'tank_targets': tank_targets, 'years': years, 'economics': economics, 'plateau_target': plateau_target}
+
+
+# ---- per-tank view (multi-tank wells) ---------------------------------------------------------------------------------------------
+def tank_rf_from_forecast(fc, phase):
+    """{tank_id: {'name','rf','cum','phase'}} at the end of a forecast; ``rf`` in % of the tank's own in-place volume (oil or gas by the tank phase)."""
+    out = {}
+    for r in fc.get('recovery') or []:
+        ph = str(r.get('Phase', 'oil')).lower(); gas = ph != 'oil'
+        out[r.get('Tank ID')] = {'name': r.get('Tank'), 'phase': ph, 'rf': float(r.get('RF gas [%]' if gas else 'RF oil [%]', 0.0) or 0.0),
+                                 'cum': float(r.get('Cum gas [Sm3]' if gas else 'Cum oil [Sm3]', 0.0) or 0.0)}
+    return out
+
+
+def wells_per_tank(nodes, wells):
+    """{tank_id: [well ids among ``wells`` that drain it]} (a commingled well appears under every tank it is linked to)."""
+    from network.reservoir_mb import linked_tank_ids
+    byid = {n['id']: n for n in nodes}; out = {}
+    for w in wells:
+        for t in linked_tank_ids((byid.get(w) or {}).get('params')): out.setdefault(t, []).append(w)
+    return out
+
+
+def tank_study(nodes, rows, min_gain_fraction=0.05):
+    """Per-tank outcome of a well-count sweep: RF and cumulative production of each tank at every well count, the number of wells draining it,
+    its own optimal well count (smallest count after which the tank gains less than ``min_gain_fraction`` extra recovery from one more well in the
+    sweep) and PVT / commingling flags. Returns {'tanks': {tid: {...}}, 'rows': [...flat table rows...]}."""
+    from network.pvt_info import pvt_map
+    pm = pvt_map(nodes); byid = {n['id']: n for n in nodes}
+    flat = []; tanks = {}
+    for r in rows:
+        k = r['Wells']; wells = [x['Added well'] for x in rows[:k]]; wpt = wells_per_tank(nodes, wells)
+        for tid, d in tank_rf_from_forecast(r['_forecast'], None).items():
+            t = tanks.setdefault(tid, {'name': d['name'] or (byid.get(tid) or {}).get('name') or tid, 'phase': d['phase'], 'series': []})
+            t['series'].append({'Wells': k, 'RF [%]': d['rf'], 'Cum': d['cum'], 'Wells on tank': len(wpt.get(tid, []))})
+            flat.append({'Tank': t['name'], 'Wells (field)': k, 'Wells on tank': len(wpt.get(tid, [])), 'RF [%]': d['rf'], 'Cum': d['cum']})
+    for tid, t in tanks.items():
+        s = t['series']; opt = s[0]['Wells'] if s else 0
+        for i in range(1, len(s)):
+            prev = s[i - 1]['Cum']
+            if s[i]['Wells on tank'] > s[i - 1]['Wells on tank'] and prev > 0 and (s[i]['Cum'] - prev) / prev >= min_gain_fraction: opt = s[i]['Wells']
+            elif s[i]['Wells on tank'] > s[i - 1]['Wells on tank'] and prev <= 0 and s[i]['Cum'] > 0: opt = s[i]['Wells']
+        t['optimal_wells_field'] = opt
+        t['optimal_wells_on_tank'] = next((x['Wells on tank'] for x in s if x['Wells'] == opt), 0)
+        t['final_rf'] = s[-1]['RF [%]'] if s else None
+        t['pvt'] = (pm.get(tid) or {}).get('label', '')
+        all_w = wells_per_tank(nodes, [x['Added well'] for x in rows])
+        t['commingled_wells'] = [w for w in all_w.get(tid, []) if len(wells_per_tank(nodes, [w])) > 1]
+        flags = []
+        for w in all_w.get(tid, []):
+            note = (pm.get(w) or {}).get('note')
+            if note: flags.append(f"{(byid.get(w) or {}).get('name') or w}: {note}")
+        t['pvt_flags'] = flags
+    return {'tanks': tanks, 'rows': flat}
+
+
+def greedy_order(nodes, edges, candidates, start, years, step_days, enforce_constraints=True, phase=None, step_solver=None, workers=1, progress=None):
+    """Placement sweep: build the drilling order one well at a time, each time adding the candidate that gives the largest EUR with the wells chosen
+    so far. Costs n(n+1)/2 forecasts, so keep the candidate list short (<= 8 is quick). Returns (order, [EUR after each addition])."""
+    phase = phase or primary_phase(nodes); chosen = []; left = list(candidates); eurs = []; done = 0; total = len(left) * (len(left) + 1) // 2
+    while left:
+        res = run_scenarios(nodes, edges, [{'name': f'+{c}', 'wells': chosen + [c]} for c in left], start, years, step_days, enforce_constraints,
+                            step_solver=step_solver, workers=workers)
+        vals = [(_series(r['forecast'], phase)[2] or [0.0])[-1] for r in res]
+        i = max(range(len(left)), key=lambda j: vals[j]); chosen.append(left.pop(i)); eurs.append(vals[i]); done += len(vals)
+        if progress: progress(done, total)
+    return chosen, eurs
 
 
 # ---- printable report ------------------------------------------------------------------------------------------------------------

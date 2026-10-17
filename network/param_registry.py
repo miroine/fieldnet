@@ -58,6 +58,8 @@ PARAMS: list[Param] = [
     P('darcy_bo', 'Darcy: oil formation volume factor', ['well'], unit_text='rm³/Sm³', min=0.5, max=5.0, default=1.2, step=0.05),
     P('darcy_orientation', 'Darcy: well geometry', ['well'], kind='choice', choices=(('vertical', 'Vertical'), ('deviated', 'Deviated'), ('horizontal', 'Horizontal'))),
     P('darcy', 'inflow from Darcy properties (on/off)', ['well'], kind='bool'),
+    P('darcy_nd_d', 'Darcy: non-Darcy coefficient D (gas)', ['well'], unit_text='(MSm³/d)⁻¹', min=0.0, max=100.0, default=0.0, step=0.005, warn_max=5.0),
+    P('darcy_wc_dependence', 'Darcy: PI depends on water cut (Corey)', ['well'], kind='bool'),
     P('ipr_model', 'IPR model', ['well'], kind='choice', choices=(('PI', 'Productivity index'), ('Vogel', 'Vogel'), ('Gas', 'Gas back-pressure'))),
     # ---- well: fluid and tubing
     P('water_cut', 'water cut', ['well', 'line'], unit='fraction', min=0.0, max=0.9999, default=0.2, step=0.05),

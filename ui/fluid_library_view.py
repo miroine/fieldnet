@@ -76,6 +76,12 @@ def render_fluid_library(st, nodes, edges, solved, spec_from_state):
             st.markdown('**Flowlines**'); lsel = st.multiselect('Flowlines', list(lines), format_func=lines.get, key='fl_asg_lines')
             if st.button('Assign to flowlines', key='fl_asg_l', disabled=not lsel, use_container_width=True, help='Sets the fluid a line carries when it is hydraulically solved; commingled flow is better left to the blend (below).'): n = fl.assign(nodes, edges, f, [], lsel); ss.pop('hub_cache', None); st.success(f'{n} line(s) updated. Re-solve.'); st.rerun()
     with t_chk:
+        from network.pvt_info import used_by, fix_all, summary as _pvs
+        ub = used_by(nodes, edges)
+        if ub:
+            st.markdown('**PVT used by (⚠ = differs from a linked tank)**'); st.dataframe(pd.DataFrame(ub).drop(columns=['Detail']), hide_index=True, use_container_width=True)
+        if _pvs(nodes)['mismatches'] and st.button('Make every flagged well / injector follow its tank PVT', key='fl_fix_all', type='primary'):
+            ch = fix_all(nodes); ss.pop('hub_cache', None); ss['_applied_note'] = f'{len(ch)} element(s) now use their tank PVT.'; st.rerun()
         ck = fl.check(lib, nodes, edges, solved())
         if ck.empty: st.success('No fluid inconsistencies found.')
         else: st.dataframe(ck, hide_index=True, use_container_width=True)

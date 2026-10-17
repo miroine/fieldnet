@@ -76,6 +76,32 @@ def gas_mu_z(pr_bar, t_c, gas_sg, visc_cp=None, z=None):
     return mu, zz
 
 
+COREY = {'swc': 0.2, 'sor': 0.25, 'krw_end': 0.3, 'kro_end': 0.9, 'nw': 2.0, 'no': 2.0, 'visc_w_cp': 0.5}
+
+
+def _corey_k(sw, c):
+    s = min(max((sw - c['swc']) / max(1.0 - c['swc'] - c['sor'], 1e-6), 0.0), 1.0)
+    return c['kro_end'] * (1.0 - s) ** c['no'], c['krw_end'] * s ** c['nw']
+
+
+def wc_mobility_factor(wc, p, mu_o):
+    """Total (oil + water) mobility at water cut ``wc`` relative to oil-only flow at connate water, from Corey relative permeabilities.
+    The Darcy oil PI is a liquid PI at wc = 0; as the water cut rises the saturation near the well rises with it and the mobility of the mixture changes.
+    Returns (factor, Sw). The water cut fixes the fractional flow, so Sw is found by bisection."""
+    c = {k: float(p.get('darcy_' + k, v) if p.get('darcy_' + k) not in (None, '') else v) for k, v in COREY.items()}
+    mu_w = max(c['visc_w_cp'], 1e-3); wc = min(max(float(wc or 0.0), 0.0), 0.9999)
+    def fw(sw):
+        ko, kw = _corey_k(sw, c); lo, lw = ko / mu_o, kw / mu_w
+        return lw / (lw + lo) if lw + lo > 0 else 0.0
+    a, b = c['swc'], 1.0 - c['sor']
+    for _ in range(60):
+        m = 0.5 * (a + b)
+        if fw(m) < wc: a = m
+        else: b = m
+    sw = 0.5 * (a + b); ko, kw = _corey_k(sw, c)
+    return max((ko / mu_o + kw / mu_w) / max(c['kro_end'] / mu_o, 1e-12), 1e-3), sw
+
+
 def darcy_ipr(p, pr_bar, fluid='oil'):
     """Productivity from reservoir properties in ``p`` (keys ``darcy_*``, plus ``skin``, ``temperature_c``/``bottomhole_temperature_c``, ``gas_sg``).
     ``fluid`` 'oil' -> returns ``pi`` [Sm3/d/bar]; 'gas' -> ``gas_c`` [Sm3/d/bar^2]. Returns {'pi','gas_c','denominator','warnings','layers'}."""
@@ -94,15 +120,23 @@ def darcy_ipr(p, pr_bar, fluid='oil'):
     t_c = float(p.get('bottomhole_temperature_c', p.get('temperature_c', 80.0)) or 80.0); tk = t_c + 273.15
     if fluid == 'gas':
         vis = p.get('darcy_gas_visc_cp'); mu, z = gas_mu_z(pr_bar, t_c, float(p.get('gas_sg', 0.7) or 0.7), float(vis) if vis not in (None, '', 0) else None, p.get('darcy_z') or None)
-    pi_tot = c_tot = 0.0; dens = []
+    pi_tot = c_tot = 0.0; dens = []; const_tot = 0.0
     for lay in layers:
         d = _layer(p, lay); kv = d['kh'] * d['kvkh']
         D = geometry_denominator(orient, d['kh'] * MD, kv * MD, d['h'], re, rw, d['skin'], regime, L, inc); dens.append(D)
         if fluid == 'gas':
             c_si = math.pi * d['kh'] * MD * d['h'] * T_SC / (P_SC * tk * mu * CP * z * D)       # m3/s per Pa^2
-            c_tot += c_si * (BAR ** 2) * DAY
+            c_tot += c_si * (BAR ** 2) * DAY; const_tot += c_si * D * (BAR ** 2) * DAY
         else:
             pi_si = 2.0 * math.pi * d['kh'] * MD * d['h'] / (mu_o * CP * bo * D)                 # m3/s per Pa
             pi_tot += pi_si * BAR * DAY
-    return {'pi': pi_tot, 'gas_c': c_tot, 'gas_n': 1.0, 'denominator': dens[0] if len(dens) == 1 else dens, 'warnings': warns, 'layers': len(layers),
+    wc_factor = sw = None
+    if fluid != 'gas' and p.get('darcy_wc_dependence') in (True, 'true', 'True', 1):
+        wc_factor, sw = wc_mobility_factor(p.get('water_cut', 0.0), p, mu_o); pi_tot *= wc_factor
+        if float(p.get('water_cut') or 0.0) > 0.95: warns.append('Water cut above 95 %: the relative-permeability mobility at the well is a screening estimate.')
+    gas_b = 0.0
+    if fluid == 'gas' and c_tot > 0 and float(_g(p, 'nd_d', 0.0) or 0.0) > 0:
+        d_eff = const_tot / c_tot                                  # effective geometric denominator of the (possibly layered) well
+        gas_b = (float(_g(p, 'nd_d', 0.0)) / 1e6) / max(d_eff, 1e-9) / c_tot      # extra rate-dependent skin D*q (q in MSm3/d): dp2 = q/C + b q^2 [bar2, q in Sm3/d]
+    return {'pi': pi_tot, 'gas_c': c_tot, 'gas_b': gas_b, 'wc_factor': wc_factor, 'sw': sw, 'gas_n': 1.0, 'denominator': dens[0] if len(dens) == 1 else dens, 'warnings': warns, 'layers': len(layers),
             'orientation': orient, 'fluid': fluid, **({'mu_cp': mu, 'z': z} if fluid == 'gas' else {'mu_cp': mu_o, 'bo': bo})}

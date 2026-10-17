@@ -48,8 +48,22 @@ Streamlit could not be installed in the build sandbox, so the live UI has **neve
 - [ ] Schedule: pick *Element type* = Well, event *Darcy: permeability*, set a date, add; run the forecast: PI drops/rises from that date. Repeat with a Tank event (target RF, aquifer) and a temperature event in °F on the Field profile.
 - [ ] Tools → Model checks → *Input & unit consistency*: set a tubing ID of 3.5 → error naming "inch"; fix it → clean.
 
-- [ ] Select a well, in *Drains reservoir tank(s)* pick two tanks, set shares 60/40: caption shows the weighted pressure; Apply; Solve; forecast: both tanks lose pressure, the well row in the results names both tanks. Drag a second tank onto a well in the canvas: same result.
+- [ ] Select a well, in *Drains reservoir tank(s)* pick two tanks, set shares 60/40: caption shows the weighted pressure; Apply; Solve; forecast: both tanks lose pressure, the well row in the results names both tanks. Drag a second tank onto a well in the canvas: same result, with two dashed lines labelled with their %; select one line and press Delete to remove just that tank.
 - [ ] Click **Apply changes** (properties panel and canvas) on a larger model and note how long it takes; open Tools → Model checks → *Last run timing* and send me the top rows if it is slow. If the red "page re-ran itself" message appears, send a screenshot.
 - [ ] Network tab → Data tables → *Prepare export files* builds the Excel/CSV/YAML/JSON downloads.
+
+- [ ] Select a well → *Copy / paste settings between wells*: paste the inflow group from another well; then copy a well to two others. Same for a tank. Press Apply changes: values appear in the other elements' panels.
+- [ ] Give a tank and a well different fluid names (Fluid & PVT tab): the well shows ⚠ in orange on the canvas and a warning appears under it; give them the same fluid: the warning goes.
+
+- [ ] Create two fluids (Fluid & PVT → Fluid library). Select a tank: *PVT model (fluid)* shows both; pick one with 'also give it to the wells' ticked: the wells' API/GOR follow and the canvas labels show the fluid name. Do the same on a well and a flowline.
+- [ ] Select a tank: *Link this tank to another tank* → Add link; or drag from its OUT port onto another tank. A labelled dashed orange line appears; select it to edit the transmissibility.
+
+## 9. Round 8 — benchmark features
+- [ ] Gas well with Darcy on: set the non-Darcy coefficient D to 0.05; the open-flow capacity drops and the IPR bends over at high rate; D = 0 restores the old curve. Compare against the same case in PROSPER/GAP with a D-factor to see the size of the difference.
+- [ ] Oil well with Darcy on: tick *Productivity depends on water cut*; raise the water cut (panel or a schedule event): the PI falls then recovers at high water cut as the Corey curves dictate; the caption shows the mobility factor and Sw.
+- [ ] Uncertainty → run Monte Carlo, *Save result* as "Base"; run again with different inputs, save as "Variant"; the *Saved Monte Carlo results* section shows both and the delta. Save the case, reload it (Cases tab): P10/P50/P90 and the profiles are still there.
+- [ ] Drainage study on a field with a commingled well: per-tank RF table and chart appear; a well draining two tanks with different PVT shows ⚠. Tick the placement sweep and check the order is sensible.
+- [ ] Give a well a fluid different from its tank: the warning under the canvas now has *Make <well> follow its tank PVT*; press it; the warning goes. Fluid & PVT → *Where fluids are used* lists which elements use each PVT.
+- [ ] Change two or three values in the property panel, press **↶ Undo** once per change: values and the canvas step back; **↷ Redo** steps forward. Loading a template clears the history.
 
 Report: screenshot + the browser/terminal traceback for anything that fails.

@@ -58,6 +58,10 @@ from network.equipment import convert_edge_equipment_to_nodes, INLINE_KINDS
 from ui.history import normalize_project
 from ui.topology import validate_topology, auto_layout
 from ui.tank_alloc_view import tank_alloc_editor
+from ui.copy_paste_view import copy_paste_panel
+from ui.pvt_assign_view import pvt_dropdown
+from network.pvt_info import pvt_map, summary as pvt_summary
+from network import history as hist
 from network.reservoir_mb import tank_alloc, linked_tank_ids
 from ui.widgets import synced_number, synced_slider, synced_select, synced_text, synced_checkbox, clean_num, clean_text, to_builtin
 from network.forecast import run_forecast
@@ -269,12 +273,24 @@ with tab_net:
         except Exception: _nlab,_elab=canvas_labels(st.session_state.nodes,solved()),{}
         edit=network_editor(st.session_state.nodes, st.session_state.edges, solved(), key='network-v14', height=_edh,
                             status=status, status_message=status_msg, selected=st.session_state.get('selected'),
-                            palette=feature_palette(), labels=_nlab, edge_labels=_elab, edge_widths=_ew, epoch=st.session_state.get('canvas_epoch',0))
+                            palette=feature_palette(), labels=_nlab, edge_labels=_elab, edge_widths=_ew, epoch=st.session_state.get('canvas_epoch',0), pvt=pvt_map(st.session_state.nodes))
         # One contract (ui/graph_contract.py): only a new canvas revision is an edit; stale replays are ignored.
         if accept_canvas_payload(st.session_state, edit)=='graph': st.session_state['_applied_note']='Canvas changes applied to the model.'; st.rerun()
         if st.session_state.pop('_blank_msg',False): apply_notice(st,'Blank page ready - add components from the palette (canvas or sidebar).','applied')
         if st.session_state.get('_applied_note'): apply_notice(st,st.session_state.pop('_applied_note')+' Solve again to refresh the results.','applied')
         for msg in st.session_state.pop('graph_issues',[]) or []: st.warning(msg)
+        _pvs=pvt_summary(st.session_state.nodes)
+        if _pvs['mismatches']: st.warning('PVT differs between linked elements: '+'; '.join(f"{(next((x for x in st.session_state.nodes if x['id']==k),{}).get('name') or k)} ({note})" for k,note in _pvs['mismatches'][:8])+('...' if len(_pvs['mismatches'])>8 else '')+'. Open the well and copy the tank fluid (Fluid & PVT tab), or ignore if intended.')
+        if _pvs['mismatches']:
+            from network.pvt_info import fix_to_tank, fix_all
+            _bc=st.columns(min(len(_pvs['mismatches']),3)+1)
+            for _i,(_k,_note) in enumerate(_pvs['mismatches'][:3]):
+                _nm=next((x for x in st.session_state.nodes if x['id']==_k),{}).get('name') or _k
+                if _bc[_i].button(f'Make {_nm} follow its tank PVT',key=f'pvtfix_{_k}',use_container_width=True):
+                    fix_to_tank(st.session_state.nodes,_k); st.session_state.pop('hub_cache',None); st.session_state['_applied_note']=f'{_nm} now uses its tank PVT.'; st.rerun()
+            if _bc[-1].button('Fix all',key='pvtfix_all',use_container_width=True):
+                _ch=fix_all(st.session_state.nodes); st.session_state.pop('hub_cache',None); st.session_state['_applied_note']=f'{len(_ch)} element(s) now use their tank PVT.'; st.rerun()
+        elif len(_pvs['distinct'])>1: st.caption('PVT in use: '+' | '.join(_pvs['distinct']))
         if st.session_state.pop('solve_request',False):
             # The editor above has already been sent with the SOLVING badge.
             _pbar=st.progress(0.1,text='Preparing model…'); _t0=time.perf_counter()
@@ -300,6 +316,8 @@ with tab_net:
                 for i in issues: st.write(('🔴' if i['severity']=='error' else '🟠'),i['message'])
         st.caption('Canvas: add equipment from its palette, drag nodes, select objects, create links by clicking OUT then IN, delete/copy, undo/redo. Every edit is synchronised into the Python case model.')
     st.session_state["_applied_fp"]=_model_fingerprint(st.session_state.nodes,st.session_state.edges)
+    if st.session_state.get('canvas_epoch',0)!=st.session_state.get('_hist_epoch',0): hist.clear(st.session_state); st.session_state['_hist_epoch']=st.session_state.get('canvas_epoch',0)   # new project / template / case: fresh history
+    hist.record(st.session_state,st.session_state["_applied_fp"],st.session_state.nodes,st.session_state.edges)
     # The property panel is a fragment: editing a value reruns only the panel (fast). The Apply button below it redraws the whole app.
     @st.fragment
     def _props_panel():
@@ -335,6 +353,7 @@ with tab_net:
                 e['length_m']=unit_input(f"Length [{ul['length']}]",float(clean_num(e.get('length_m'),0.0)),length_to_display,length_from_display,'el'+eid,0.0,1e7)
                 e['diameter_m']=unit_input(f"ID [{ul['diameter']}]",float(clean_num(e.get('diameter_m'),.154)),diameter_to_display,diameter_from_display,'ed'+eid,0.001,5.0,fmt='%.4f')
                 e['elevation_change_m']=unit_input(f"Elevation change (outlet − inlet) [{ul['length']}]",float(clean_num(e.get('elevation_change_m'),0.0)),length_to_display,length_from_display,'ez'+eid,-5000.,5000.)
+                pvt_dropdown(st,st.session_state.nodes,st.session_state.edges,e,eid,is_edge=True)
                 correlation_select(st,ep,'ecor'+eid,'flowline')
                 ep['temperature_c']=unit_input(f"Inlet temperature [{ul['temperature']}]",float(clean_num(ep.get('temperature_c'),50)),temperature_to_display,temperature_from_display,'et'+eid,-20.,250.)
                 ep['water_cut']=synced_slider(st,'Water cut (line fluid)',0.,0.9999,float(clean_num(ep.get('water_cut'),.2)),'ewc'+eid)
@@ -372,6 +391,7 @@ with tab_net:
                 else: n['pressure_bar']=None
                 if n['kind'] in ('separator','separator_stage'): separator_type_editor(st,n)
                 if n['kind'] not in ('water_source','gas_source'): constraint_editor(st,n,None,n['kind'],sid,title='Handling capacities & limits',expanded=True)
+            if n['kind'] in ('reservoir','well') or (n['kind']=='gas_injector'): pvt_dropdown(st,st.session_state.nodes,st.session_state.edges,n,sid)
             if n['kind']=='reservoir':
                 PH={'oil':'Oil','oil_gascap':'Oil with gas cap','gas':'Dry gas','gas_condensate':'Gas condensate'}
                 _cur='oil_gascap' if (p.get('fluid_phase','oil')=='oil' and float(clean_num(p.get('gas_cap_m'),0.0))>0) else (p.get('fluid_phase','oil') if p.get('fluid_phase') in PH else 'oil')
@@ -465,6 +485,7 @@ with tab_net:
                 trajectory_editor(st,n)
                 prediction_source_editor(st,n,str(st.session_state.get('forecast_start') or '2026-01-01'))
                 constraint_editor(st,n,None,'well',sid,title='Constraints (this well)')
+            copy_paste_panel(st,st.session_state.nodes,n,sid)
             if st.button('Delete selected node'):
                 st.session_state.nodes=[x for x in st.session_state.nodes if x['id']!=sid]; st.session_state.edges=[e for e in st.session_state.edges if e['source']!=sid and e['target']!=sid]; st.session_state.selected=None; st.rerun()
         _fp=_model_fingerprint(st.session_state.nodes,st.session_state.edges); _base0=st.session_state.get('_applied_fp')
@@ -473,6 +494,14 @@ with tab_net:
             if _dirty: apply_notice(st,'Edits are stored in the model. Press <b>Apply changes</b> to redraw the canvas and refresh status and the other tabs.','pending')
             style_button(st,'props_apply','pending' if _dirty else 'idle')
             if st.button('Apply changes' if _dirty else 'No pending changes',key='props_apply',use_container_width=True,disabled=not _dirty): st.session_state['_applied_note']='Property changes applied.'; st.rerun()
+            hist.record(st.session_state,_fp,st.session_state.nodes,st.session_state.edges)
+            _u,_r=st.columns(2)
+            _rest=None
+            if _u.button('↶ Undo',key='props_undo',use_container_width=True,disabled=not hist.can_undo(st.session_state),help='Step back one model edit (up to 30). Widgets that are not synced to the model may keep their displayed value until reselected.'): _rest=hist.undo(st.session_state)
+            if _r.button('↷ Redo',key='props_redo',use_container_width=True,disabled=not hist.can_redo(st.session_state)): _rest=hist.redo(st.session_state)
+            if _rest:
+                st.session_state.nodes,st.session_state.edges=_rest[1],_rest[2]; st.session_state['_applied_fp']=_model_fingerprint(_rest[1],_rest[2]); st.session_state.pop('hub_cache',None); bump_canvas(); st.session_state['_hist_epoch']=st.session_state.get('canvas_epoch',0)
+                st.session_state['_applied_note']='Model restored from edit history.'; st.rerun()
     with props: _props_panel()
     st.subheader('Flowlines / pipelines')
     if st.session_state.edges:

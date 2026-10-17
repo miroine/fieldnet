@@ -99,6 +99,7 @@ def well_settings(prm: dict) -> dict:
         'pr':max(_f(p,'reservoir_pressure_bar',200.0),0.0),
         'ipr_model':_ipr_name(p.get('ipr_model','PI')),
         'gas_c':(darcy['gas_c'] if darcy else max(_f(p,'gas_c_sm3d_bar2n',50.0),0.0))*pm, 'gas_n':(1.0 if darcy else min(max(_f(p,'gas_n',1.0),0.5),1.0)), 'darcy':darcy,
+        'gas_b':((darcy.get('gas_b',0.0) if darcy else 0.0)/pm),
         'pi':pi0*mult, 'qmax':qmax0*mult,
         'depth':depth, 'tubing_id':max(_f(p,'tubing_id_m',0.0762),1e-3),
         'roughness':max(_f(p,'tubing_roughness_m',4.5e-5),0.0),
@@ -144,7 +145,12 @@ def ipr_rate(pwf, s):
         x=min(max(pwf/pr,0.0),1.0); return max(0.0,s['qmax']*(1-0.2*x-0.8*x*x))
     if s['ipr_model']=='Gas':
         d=pr*pr-max(pwf,0.0)**2
-        return 0.0 if d<=0 else s['gas_c']*d**s['gas_n']/_gas_per_liquid(s)
+        if d<=0: return 0.0
+        b=s.get('gas_b',0.0)
+        if b>0 and s['gas_c']>0:       # non-Darcy: dp2 = qg/C + b qg^2  (rate-dependent skin D*q)
+            c=s['gas_c']; qg=(-1.0/c+math.sqrt(1.0/(c*c)+4.0*b*d))/(2.0*b)
+            return qg/_gas_per_liquid(s)
+        return s['gas_c']*d**s['gas_n']/_gas_per_liquid(s)
     return max(0.0,s['pi']*(pr-pwf))
 
 
@@ -161,7 +167,8 @@ def ipr_pwf(q, s):
         # Backpressure deliverability q_g = C (pr^2 - pwf^2)^n, expressed per m3/d of liquid.
         qg=q*_gas_per_liquid(s); c=max(s['gas_c'],1e-12)
         if qg<=0: return pr - qg/c/max(pr,1.0)   # smooth extension below zero rate
-        v=pr*pr-(qg/c)**(1.0/s['gas_n'])
+        b=s.get('gas_b',0.0)
+        v=pr*pr-((qg/c+b*qg*qg) if b>0 else (qg/c)**(1.0/s['gas_n']))
         return math.sqrt(v) if v>=0 else -math.sqrt(-v)
     return pr - q/max(s['pi'],1e-9)
 
@@ -194,7 +201,10 @@ def excess_bar(q, whp, s):
 
 
 def rate_capacity(s):
-    if s['ipr_model']=='Gas': return s['gas_c']*(s['pr']**2)**s['gas_n']/_gas_per_liquid(s)
+    if s['ipr_model']=='Gas':
+        if s.get('gas_b',0.0)>0 and s['gas_c']>0:
+            return ipr_rate(0.0,s)
+        return s['gas_c']*(s['pr']**2)**s['gas_n']/_gas_per_liquid(s)
     return s['pi']*s['pr'] if s['ipr_model']=='PI' else s['qmax']
 
 

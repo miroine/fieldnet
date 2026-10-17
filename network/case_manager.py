@@ -11,7 +11,7 @@ from network.scenario_v29 import scenario_diff, _canon
 CASE_SCHEMA = 'case-1'
 LIBRARY_SCHEMA = 'case-library-1'
 FORECAST_KEEP = ('field', 'recovery', 'wells', 'tanks', 'constraints')   # parts of a forecast kept with a case: enough to rebuild yearly bars, groups, material balance and exports after loading
-EXTRAS_KEYS = ('post_scripts', 'stea_mapping', 'mb_history', 'nodal_tests', 'nodal_survey', 'fluid_library')   # user inputs (not results) stored with a case
+EXTRAS_KEYS = ('post_scripts', 'stea_mapping', 'mb_history', 'nodal_tests', 'nodal_survey', 'fluid_library', 'mc_saved', 'mc_last')   # user inputs (not results) stored with a case
 
 
 def _now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')

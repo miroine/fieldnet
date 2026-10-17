@@ -36,10 +36,25 @@ def darcy_editor(st, p, sid, length_input, pi_to_display, pi_unit, gas):
         for k in ('darcy_gas_visc_cp', 'darcy_z'):
             if p.get(k) is None: p.pop(k, None)
         p.pop('darcy_visc_cp', None); p.pop('darcy_bo', None)
+        p['darcy_nd_d'] = synced_number(st, 'Non-Darcy coefficient D [(MSm³/d)⁻¹] (0 = off)', float(clean_num(p.get('darcy_nd_d'), 0.0) or 0.0), 'dcnd' + sid, 0.0, 100.0, fmt='%.4f')
+        if not p['darcy_nd_d']: p.pop('darcy_nd_d', None)
+        st.caption('Rate-dependent skin S = S₀ + D·q. Adds a quadratic term to the back-pressure curve (Δp² = q/C + b·q²), so deliverability falls below the Darcy line at high rate.')
     else:
         c3, c4 = st.columns(2)
         p['darcy_visc_cp'] = synced_number(c3, 'Oil viscosity [cP]', g('visc_cp'), 'dcmu' + sid, 0.01, 1e4, fmt='%.3g', container=c3)
         p['darcy_bo'] = synced_number(c4, 'Oil Bo [rm³/Sm³]', g('bo'), 'dcbo' + sid, 0.5, 5.0, fmt='%.3f', container=c4)
+    if not gas:
+        p['darcy_wc_dependence'] = synced_checkbox(st, 'Productivity depends on water cut (Corey relative permeability)', bool(p.get('darcy_wc_dependence')), 'dcwc' + sid)
+        if not p['darcy_wc_dependence']: p.pop('darcy_wc_dependence', None)
+        else:
+            st.caption('The oil PI above is the dry-oil (connate-water) value; it is scaled by the total mobility at the well\'s current water cut. Uses the water cut and schedule events.')
+            with st.expander('Relative-permeability parameters'):
+                from physics.darcy_ipr import COREY
+                cc = st.columns(3)
+                for i, (k, lab) in enumerate((('swc', 'Swc'), ('sor', 'Sor'), ('krw_end', 'krw end-pt'), ('kro_end', 'kro end-pt'), ('nw', 'Corey nw'), ('no', 'Corey no'))):
+                    p['darcy_' + k] = synced_number(cc[i % 3], lab, float(clean_num(p.get('darcy_' + k), COREY[k])), 'dcc' + k + sid, 0.0, 10.0, fmt='%.3g', container=cc[i % 3])
+                p['darcy_visc_w_cp'] = synced_number(st, 'Water viscosity [cP]', float(clean_num(p.get('darcy_visc_w_cp'), COREY['visc_w_cp'])), 'dcmw' + sid, 0.05, 10.0, fmt='%.3g')
+    else: p.pop('darcy_wc_dependence', None)
     with st.expander('Commingled layers (optional: different properties per layer, one bottom-hole pressure)', expanded=bool(p.get('darcy_layers'))):
         rows = [dict(r) for r in (p.get('darcy_layers') or [])] or [{'perm_md': None, 'net_pay_m': None, 'kv_kh': None, 'skin': None}]
         st.caption('Leave empty to use the single layer above. Each row is one layer; blank cells take the value above. Productivities add.')
@@ -55,6 +70,8 @@ def darcy_editor(st, p, sid, length_input, pi_to_display, pi_unit, gas):
             else: p.pop('darcy_layers', None)
     res = darcy_ipr(p, float(clean_num(p.get('reservoir_pressure_bar'), 200.0)), 'gas' if gas else 'oil')
     for w in res['warnings']: st.warning(w)
+    if gas and res.get('gas_b'): st.caption(f"Non-Darcy term b = {res['gas_b']:.3e} bar²/(Sm³/d)²")
+    if (not gas) and res.get('wc_factor') is not None: st.caption(f"Water-cut mobility factor {res['wc_factor']:.2f} (Sw at the well ≈ {res['sw']:.2f})")
     if gas: st.metric('Back-pressure C (n = 1) [Sm³/d/bar²]', f"{res['gas_c']:,.2f}", help=f"μ = {res['mu_cp']:.4f} cP, z = {res['z']:.3f} at 0.75·Pr; D = {res['denominator'] if not isinstance(res['denominator'], list) else sum(res['denominator'])/len(res['denominator']):.2f}")
     else:
         vert = darcy_ipr({**p, 'darcy_orientation': 'vertical', 'darcy_inclination_deg': 0}, float(clean_num(p.get('reservoir_pressure_bar'), 200.0)), 'oil')['pi']

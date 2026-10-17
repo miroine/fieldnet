@@ -30,7 +30,7 @@ def _fresh_forecast(ss):
     return cf['fc'] if cf and cf.get('hash') == graph_hash(ss.nodes, ss.edges) else None
 
 
-SESSION_EXTRAS = {'post_scripts': 'pp_src', 'stea_mapping': 'stea_map', 'mb_history': 'mb_history', 'nodal_tests': 'nodal_tests', 'nodal_survey': 'nodal_survey', 'fluid_library': 'fluids'}
+SESSION_EXTRAS = {'post_scripts': 'pp_src', 'stea_mapping': 'stea_map', 'mb_history': 'mb_history', 'nodal_tests': 'nodal_tests', 'nodal_survey': 'nodal_survey', 'fluid_library': 'fluids', 'mc_saved': 'mc_saved', 'mc_last': 'v17_mc'}
 
 
 def current_extras(ss):
@@ -47,6 +47,11 @@ def load_case_into_editor(st, case, reset):
     for k, v in SESSION_EXTRAS.items():
         if k in ex: ss[v] = copy.deepcopy(ex[k])
         else: ss.pop(v, None)
+    if 'mc_last' in ex:
+        try:
+            from network.mc_job import get_job
+            jb = get_job('v17_mc'); ss['v17_mc_t0'] = jb.t0 if jb else ss.get('v17_mc_t0')   # keep the loaded result; a finished job from before the load must not overwrite it
+        except Exception: pass
     for k in ('hub_cache', 'pp_tables', 'nodal_mc', 'nodal_match', 'blowout', 'case_forecast', 'shared_tables', 'export_basket'): ss.pop(k, None)
     reset()
     if case.get('forecast') and case['forecast'].get('field'):
